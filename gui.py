@@ -1,158 +1,148 @@
-import os
-import threading
-import tkinter as tk
-from tkinter import filedialog, messagebox
+import asyncio
+import flet as ft
 
 from cryptography.exceptions import InvalidTag
 from crypto_core import encrypt_file, decrypt_file
 
 ENCRYPTED_EXTENSION = ".enc"
 
-class EncryptionApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("File Encryption Tool")
-        self.root.geometry("420x220")
-        self.root.resizable(False, False)
+def format_size(num_bytes: int) -> str:
+    size = float(num_bytes or 0)
+    for unit in ("B","KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.of} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
 
-        self.input_path = tk.StringVar()
+def main(page: ft.Page):
+    page.title = "File Encryption Tool"
+    page.padding = 20
+    page.window.width = 480
+    page.window.height = 420
 
-        # File selection row
-        tk.Label(root, text="File:").grid(row=0, column=0, padx=10, pady=15, sticky="w")
-        tk.Entry(root, textvariable=self.input_path, width=35).grid(row=0, column=1, pady=15)
-        tk.Button(root, text="Browse...", command=self.browse_file).grid(row=0, column=2, padx=10)
+    file_picker = ft.FilePicker()
+    page.services.append(file_picker)
 
-        #Password row
-        tk.Label(root, text="Password:").grid(row=1, column=0, padx=10, sticky="w")
-        self.password_entry = tk.Entry(root, show="*", width=35)
-        self.password_entry.grid(row=1, column=1, columnspan=2, pady=5, sticky="w", padx=(0, 10))
+    selected = {"name": None, "data": None}
 
-        #Action buttons
-        button_frame = tk.Frame(root)
-        button_frame.grid(row=2, column=0, columnspan=3, pady=25)
-        self.encrypt_button = tk.Button(button_frame, text="Encrypt", width=15, command=self.handle_encrypt)
-        self.decrypt_button = tk.Button(button_frame, text="Decrypt", width=15, command=self.handle_decrypt)
-        self.encrypt_button.pack(side="left", padx=10)
-        self.decrypt_button.pack(side="left", padx=10)
+    # Controls
+    file_label = ft.Text("No file selected", expand=True, overflow=ft.TextOverflow.ELLIPSIS)
+    browse_button = ft.Button(content="Browse...", icon=ft.Icons.FOLDER_OPEN)
+    password_field = ft.TestField(label="Password", password=True, can_reveal_password=True)
+    encrypt_button = ft.Button(content="Encrypt", icon=ft.Icons.LOCK, expand=True)
+    decrypt_button = ft.Button(content="Decrypt", icon=ft.Icons.LOCK, expand=True)
+    progress = ft.ProgressRing(visible=False, width=20, height=20)
+    status = ft.Text("", color=ft.Colors.GREY)
 
-        #Status label
-        self.status_label = tk.Label(root, text="", fg="gray")
-        self.status_label.grid(row=3, column=0, columnspan=3)
+    # Helpers
+    def set_status(message: str, color=ft.Colors.GREY):
+        status.value = message
+        status.color = color
+        page.update()
 
-    #UI helpers
-    def browse_file(self):
-        path = filedialog.askopenfilename(title="Select a file")
-        if path:
-            self.input_path.set(path)
-            self.status_label.config(text="")
+    def set_busy(busy: bool, message: str = ""):
+        for control in (browse_button, encrypt_button, decrypt_button, password_field):
+            control.disabled = busy
+        progress.visible = busy
+        set_status(message)
 
-    def validate_inputs(self):
-        """Returns (input_path, password) if valid, or None (after showing an error)."""
-        input_path = self.input_path.get().strip()
-        password = self.password_entry.get()
+    def is_mobile() -> bool:
+        return page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.IOS)
 
-        if not input_path:
-            messagebox.showerror("Missing file", "Please select a file first.")
-            return None
-        if not os.path.isfile(input_path):
-            messagebox.showerror("File not found", f"Could not find:\n{input_path}")
-            return None
+    # Actions
+    async def browse(e):
+        files = await file_picker.pick_files(dialog_title="Select a file", with_data=True)
+        if not files:
+            return
+        picked = files[0]
+        data = picked.bytes
+        if data is None and picked.path:
+            try:
+                with open(picked.path, "rb") as f:
+                    data = f.read()
+            except OSError as ex:
+                set_status(f"Could not read the file:{ex}", ft.Colors.RED)
+                return
+        if data is None:
+            set_status("Could not read this file.", ft.Colors.RED)
+            return
+
+        selected["name"] = picked.name
+        selected["data"] = data
+        file_label.value = f"{picked.name} ({format_size(len(data))})"
+        set_status("")
+
+    async def run_operation(mode: str):
+        password = password_field.value
+        if selected["data"] is None:
+            set_status("Please select a file first.", ft.Colors.RED)
+            return
         if not password:
-            messagebox.showerror("Missing password", "Please enter a password.")
-            return None
-        return input_path, password
-
-    def confirm_overwrite(self, output_path):
-        if os.path.exists(output_path):
-            return messagebox.askyesno(
-                "File already exists",
-                f"{os.path.basename(output_path)} already exists. Overwrite it?",
-            )
-        return True
-
-    def set_busy(self, busy: bool, message: str = ""):
-        state = "disabled" if busy else "normal"
-        self.encrypt_button.config(state=state)
-        self.decrypt_button.config(state=state)
-        self.status_label.config(text=message, fg="gray")
-        self.root.update_idletasks()
-
-    def run_in_background(self, target):
-        """Run a slow operation off the main thread so the UI doesn't freeze."""
-        thread = threading.Thread(target=target, daemon=True)
-        thread.start()
-
-    #Actions
-    def handle_encrypt(self):
-        validated = self.validate_inputs()
-        if not validated:
-            return
-        input_path, password = validated
-        output_path = input_path + ENCRYPTED_EXTENSION
-
-        if not self.confirm_overwrite(output_path):
+            set_status("Please enter a password.", ft.Colors.RED)
             return
 
-        self.set_busy(True, "Encrypting...")
-
-        def work():
-            try:
-                encrypt_file(input_path, output_path, password)
-                self.root.after(0, self.on_success, "Encrypted", output_path)
-            except PermissionError:
-                self.root.after(0, self.on_error, "Permission denied while writing the output file.")
-            except OSError as e:
-                self.root.after(0, self.on_error, f"Could not read/write file:\n{e}")
-            except Exception as e:
-                self.root.after(0, self.on_error, f"Unexpected error:\n{e}")
-
-        self.run_in_background(work)
-
-    def handle_decrypt(self):
-        validated = self.validate_inputs()
-        if not validated:
-            return
-        input_path, password = validated
-
-        if input_path.endswith(ENCRYPTED_EXTENSION):
-            output_path = input_path[: -len(ENCRYPTED_EXTENSION)]
+        name = selected["name"]
+        if node == "encrypt":
+            set_busy(True, "Encrypting...")
+            worker = encrypt_bytes
+            suggested_name = name + ENCRYPTED_EXTENSION
+            done_verb = "Encrypted"
         else:
-            output_path = input_path + ".dec"
-
-        if not self.confirm_overwrite(output_path):
+            set_busy(True, "Decrypting...")
+            worker = decrypt_bytes
+            suggested_name = (
+                name[: -len(ENCRYPTED_EXTENSION)]
+                if name.endswith(ENCRYPTED_EXTENSION)
+                else name + ".dec"
+            )
+            done_verb = "Decrypted"
+        
+        try:
+            result = await asyncio.to_thread(worker, selected["data"], password)
+        except InvalidTag:
+            set_busy(False)
+            set_status("Incorrect password, or the file is corrupted/tampered with.", ft.Colors.RED)
             return
+        except Exception as ex:
+            set_busy(False)
+            set_status(f"Unexpected error: {ex}", ft.Colors.RED)
+            return
+        
+        set_busy(False, "Choose where to save the result...")
+        try:
+            saved = await file_picker.save_file(dialog_title=f"Save {done_verb.lower()} file", file_name=suggested_name, src_bytes=result)
+        except Exception as ex:
+            set_status(f"Could not save the file: {ex}", ft.Colors.RED)
+            return
+        
+        if saved:
+            set_status(f"{done_verb} and saved: {saved}", ft.Colors.GREEN)
+        elif is_mobile():
+            set_status(f"{done_verb}. check the location you picked.", ft.Colors.GREEN)
+        else:
+            set_status("Save cancelled - nothing was written.", ft.Colors.ORANGE)
+        
+    async def on_encrypt(e):
+        await run_operation("encrypt")
 
-        self.set_busy(True, "Decrypting...")
+    async def on_decrypt(e):
+        await run_operation("decrypt")
 
-        def work():
-            try:
-                decrypt_file(input_path, output_path, password)
-                self.root.after(0, self.on_success, "Decrypted", output_path)
-            except InvalidTag:
-                self.root.after(
-                    0, self.on_error, "Incorrect password, or the file is corrupted/tampered with."
-                )
-            except PermissionError:
-                self.root.after(0, self.on_error, "Permission denied while writing the output file.")
-            except OSError as e:
-                self.root.after(0, self.on_error, f"Could not read/write file:\n{e}")
-            except Exception as e:
-                self.root.after(0, self.on_error, f"Unexpected error:\n{e}")
+    browse_button.on_click = browse
+    encrypt_button.on_click = on_encrypt
+    decrypt_button.on_click = on_decrypt
 
-        self.run_in_background(work)
-
-    #Result callbacks
-    def on_success(self, verb, output_path):
-        self.set_busy(False, f"{verb} -> {os.path.basename(output_path)}")
-        self.status_label.config(fg="green")
-        messagebox.showinfo("Success", f"{verb}:\n{output_path}")
-
-    def on_error(self, message):
-        self.set_busy(False, "Failed.")
-        self.status_label.config(fg="red")
-        messagebox.showerror("Error", message)
-
-def launch():
-    root = tk.Tk()
-    EncryptionApp(root)
-    root.mainloop()
+    # Layout
+    page.add(
+        ft.SafeArea(
+            content=ft.Column(
+                spacing=20,
+                controls=[
+                    ft.Text("File Encryption Tool", size=22, weight=ft.FontWeight.BOLD),
+                    ft.Row(controls=[file_label, browse_button]),
+                    password_field,
+                    ft.Row(controls=[encrypt_button, decrypt_button]),
+                    ft.Row(controls=[progress, status]),
+                ],
+            )
+        )
+    )
