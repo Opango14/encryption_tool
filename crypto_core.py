@@ -1,10 +1,12 @@
 import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from cryptography.exceptions import InvalidTag
 
 SALT_SIZE = 16
 NONCE_SIZE = 12
 KEY_SIZE = 32
+TAG_SIZE = 16
 
 def derive_key(password: str, salt: bytes) -> bytes:
     kdf = Scrypt(
@@ -25,6 +27,8 @@ def encrypt_bytes(plaintext: bytes, password: str) -> bytes:
     return salt + nonce + ciphertext
 
 def decrypt_bytes(data: bytes, password: str) -> bytes:
+    if len(data) < SALT_SIZE + NONCE_SIZE + TAG_SIZE:
+        raise InvalidTag()
     salt = data[:SALT_SIZE]
     nonce = data[SALT_SIZE:SALT_SIZE + NONCE_SIZE]
     ciphertext = data[SALT_SIZE + NONCE_SIZE:]
