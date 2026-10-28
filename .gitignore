@@ -1,2 +1,13 @@
-venv
-__pycache__
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Build output
+build/
+dist/
+*.spec
+
+# Test leftovers
+tests/sample.*

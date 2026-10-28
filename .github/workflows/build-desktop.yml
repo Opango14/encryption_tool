@@ -1,0 +1,77 @@
+name: Build desktop apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            upload_path: dist/*.exe
+          - os: macos-latest
+            name: macos
+            upload_path: dist/FileEncryptionTool-macos.zip
+          - os: ubuntu-latest
+            name: linux
+            upload_path: dist/FileEncryptionTool-linux.tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        shell: bash
+        run: |
+          python tests/test_core.py
+          python tests/test_gui.py
+
+      - name: Build executable
+        shell: bash
+        run: |
+          flet pack main.py \
+            --name FileEncryptionTool \
+            --product-name "File Encryption Tool" \
+            --product-version 1.0.0 \
+            -y
+          ls -la dist
+
+      - name: Archive (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/FileEncryptionTool.app dist/FileEncryptionTool-macos.zip
+
+      - name: Archive (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cd dist
+          tar -czf FileEncryptionTool-linux.tar.gz \
+            FileEncryptionTool FileEncryptionTool.desktop
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FileEncryptionTool-${{ matrix.name }}
+          path: ${{ matrix.upload_path }}
+          if-no-files-found: error
