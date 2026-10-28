@@ -2,7 +2,7 @@ import asyncio
 import flet as ft
 
 from cryptography.exceptions import InvalidTag
-from crypto_core import encrypt_file, decrypt_file
+from crypto_core import encrypt_bytes, decrypt_bytes
 
 ENCRYPTED_EXTENSION = ".enc"
 
@@ -10,7 +10,7 @@ def format_size(num_bytes: int) -> str:
     size = float(num_bytes or 0)
     for unit in ("B","KB", "MB", "GB"):
         if size < 1024 or unit == "GB":
-            return f"{size:.of} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
 
 def main(page: ft.Page):
@@ -27,7 +27,7 @@ def main(page: ft.Page):
     # Controls
     file_label = ft.Text("No file selected", expand=True, overflow=ft.TextOverflow.ELLIPSIS)
     browse_button = ft.Button(content="Browse...", icon=ft.Icons.FOLDER_OPEN)
-    password_field = ft.TestField(label="Password", password=True, can_reveal_password=True)
+    password_field = ft.TextField(label="Password", password=True, can_reveal_password=True)
     encrypt_button = ft.Button(content="Encrypt", icon=ft.Icons.LOCK, expand=True)
     decrypt_button = ft.Button(content="Decrypt", icon=ft.Icons.LOCK, expand=True)
     progress = ft.ProgressRing(visible=False, width=20, height=20)
@@ -81,7 +81,7 @@ def main(page: ft.Page):
             return
 
         name = selected["name"]
-        if node == "encrypt":
+        if mode == "encrypt":
             set_busy(True, "Encrypting...")
             worker = encrypt_bytes
             suggested_name = name + ENCRYPTED_EXTENSION
